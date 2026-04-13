@@ -113,22 +113,34 @@ def build_backlink_graph(wat_path=None):
     logger.info('Backlink graph built: %d nodes, %d edges', len(graph), edges)
     return {'nodes': len(graph), 'edges': edges, 'records_processed': records_seen}
 
-@shared_task
-def send_loan_notification(loan_id):
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def send_loan_notification(self, loan_id):
     try:
-        loan = Loan.objects.get(id=loan_id)
-        member_email = loan.member.user.email
-        book_title = loan.book.title
+        loan = Loan.objects.select_related('member__user', 'book').get(id=loan_id)
+    except Loan.DoesNotExist:
+        logger.error('send_loan_notification: no loan with id %s', loan_id)
+        return
+
+    member_email = loan.member.user.email
+    if not member_email:
+        logger.warning('send_loan_notification: loan %s member has no email', loan_id)
+        return
+
+    try:
         send_mail(
             subject='Book Loaned Successfully',
-            message=f'Hello {loan.member.user.username},\n\nYou have successfully loaned "{book_title}".\nPlease return it by the due date.',
+            message=(
+                f'Hello {loan.member.user.username},\n\n'
+                f'You have successfully loaned "{loan.book.title}".\n'
+                f'Please return it by {loan.due_date}.'
+            ),
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[member_email],
             fail_silently=False,
         )
-    except Loan.DoesNotExist:
-        logger.error(f'No loan with id {loan_id}')
-        raise
+    except Exception as exc:
+        logger.exception('send_loan_notification: email send failed for loan %s', loan_id)
+        raise self.retry(exc=exc)
 
 
 @shared_task

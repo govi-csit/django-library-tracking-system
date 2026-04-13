@@ -20,48 +20,67 @@ class AuthorViewSet(viewsets.ModelViewSet):
     serializer_class = AuthorSerializer
 
 class BookViewSet(viewsets.ModelViewSet):
-    queryset = Book.objects.all()
+    queryset = Book.objects.select_related('author').all()
     serializer_class = BookSerializer
 
     @action(detail=True, methods=['post'])
     def loan(self, request, pk=None):
+        member_id = request.data.get('member_id')
         with transaction.atomic():
+            try:
+                book = Book.objects.select_for_update().get(pk=pk)
+            except Book.DoesNotExist:
+                return Response({'error': 'Book does not exist.'}, status=status.HTTP_404_NOT_FOUND)
 
-
-
-            book = Book.objects.select_for_update().get(pk=pk)
             if book.available_copies < 1:
                 return Response({'error': 'No available copies.'}, status=status.HTTP_400_BAD_REQUEST)
-            member_id = request.data.get('member_id')
+
             try:
                 member = Member.objects.get(id=member_id)
             except Member.DoesNotExist:
                 return Response({'error': 'Member does not exist.'}, status=status.HTTP_400_BAD_REQUEST)
 
-            existing_loan = Loan.objects.filter(book=book, member=member, is_returned=False).exists()
-            if existing_loan:
+            if Loan.objects.filter(book=book, member=member, is_returned=False).exists():
                 return Response({'error': 'Book already loaned.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            updated = Book.objects.filter(
+                pk=book.pk, available_copies__gt=0
+            ).update(available_copies=F('available_copies') - 1)
+            if not updated:
+                return Response({'error': 'No available copies.'}, status=status.HTTP_400_BAD_REQUEST)
 
             loan = Loan.objects.create(book=book, member=member)
 
-            Book.objects.filter(pk=book.pk, available_copies__gt=0).update(available_copies=F('available_copies')-1)
-            book.save()
-            send_loan_notification.delay(loan.id)
-            return Response({'status': 'Book loaned successfully.'}, status=status.HTTP_201_CREATED)
+        send_loan_notification.delay(loan.id)
+        return Response({'status': 'Book loaned successfully.'}, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'])
     def return_book(self, request, pk=None):
-        book = self.get_object()
         member_id = request.data.get('member_id')
-        try:
-            loan = Loan.objects.get(book=book, member__id=member_id, is_returned=False)
-        except Loan.DoesNotExist:
-            return Response({'error': 'Active loan does not exist.'}, status=status.HTTP_400_BAD_REQUEST)
-        loan.is_returned = True
-        loan.return_date = timezone.now().date()
-        loan.save()
-        book.available_copies += 1
-        book.save()
+        with transaction.atomic():
+            try:
+                book = Book.objects.select_for_update().get(pk=pk)
+            except Book.DoesNotExist:
+                return Response({'error': 'Book does not exist.'}, status=status.HTTP_404_NOT_FOUND)
+
+            try:
+                loan = Loan.objects.select_for_update().get(
+                    book=book, member__id=member_id, is_returned=False
+                )
+            except Loan.DoesNotExist:
+                return Response(
+                    {'error': 'Active loan does not exist.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            loan.is_returned = True
+            loan.return_date = timezone.now().date()
+            loan.save(update_fields=['is_returned', 'return_date'])
+
+            Book.objects.filter(pk=book.pk).update(
+                available_copies=F('available_copies') + 1
+            )
+
         return Response({'status': 'Book returned successfully.'}, status=status.HTTP_200_OK)
 
 class MemberViewSet(viewsets.ModelViewSet):
@@ -89,7 +108,7 @@ class MemberViewSet(viewsets.ModelViewSet):
 
 
 class LoanViewSet(viewsets.ModelViewSet):
-    queryset = Loan.objects.all()
+    queryset = Loan.objects.select_related('book__author', 'member__user').all()
     serializer_class = LoanSerializer
 
     @action(detail=True, methods=['post'], url_path='extend_due_date')
