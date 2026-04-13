@@ -1,3 +1,14 @@
+def flatten_dict(nested, parent_key='', sep='.'):
+    flattened = {}
+    for key, value in nested.items():
+        composite_key = f"{parent_key}{sep}{key}" if parent_key else key
+        if isinstance(value, dict):
+            flattened.update(flatten_dict(value, composite_key, sep))
+        else:
+            flattened[composite_key] = value
+    return flattened
+
+
 def deduplicate_list_preserving_order(original_list):
     deduplicated_list = []
     for item in original_list:
@@ -19,8 +30,10 @@ def group_by_dept_employees(items):
 
 
 if __name__ == "__main__":
-    # # 1. Flatten this nested dictionary into {"a.b": 1, "a.c.d": 2}
-    # nested_dict = {"a": {"b": 1, "c": {"d": 2}}}
+    # 1. Flatten this nested dictionary into {"a.b": 1, "a.c.d": 2}
+    nested_dict = {"a": {"b": 1, "c": {"d": 2}}}
+    flattened_dict = flatten_dict(nested_dict)
+    print(f"Flattened dict: {flattened_dict}")
 
     # 2. Deduplicate this list preserving order → [3, 1, 2, 4]
     duplicated_list = [3, 1, 2, 3, 2, 4, 1]
