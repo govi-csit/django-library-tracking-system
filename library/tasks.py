@@ -132,27 +132,31 @@ def send_loan_notification(loan_id):
 
 
 @shared_task
-def check_overdue_loans(loan_id):
-    try:
-        today = timezone.now().date()
-        overdue_loans = Loan.objects.filter(
-            is_returned=False,
-            due_date__lt=today,
-        ).select_related('member__user', 'book')
+def check_overdue_loans():
+    today = timezone.now().date()
+    overdue_loans = Loan.objects.filter(
+        is_returned=False,
+        due_date__lt=today,
+    ).select_related('member__user', 'book')
 
-        for loan in overdue_loans:
-            member_email = loan.member.user.email
-            book_title = loan.book.title
-            due_date = loan.due_date
+    notified = 0
+    for loan in overdue_loans:
+        member_email = loan.member.user.email
+        if not member_email:
+            logger.warning('Skipping overdue loan %s: member has no email', loan.id)
+            continue
+        send_mail(
+            subject='Overdue Book Reminder',
+            message=(
+                f'Hello {loan.member.user.username},\n\n'
+                f'"{loan.book.title}" was due on {loan.due_date}.\n'
+                f'Please return it as soon as possible.'
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[member_email],
+            fail_silently=False,
+        )
+        notified += 1
 
-            send_mail(
-                subject='Overdue Book Reminder',
-                message=f'{book_title} is due on "{due_date}".\nPlease return it asap',
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[member_email],
-                fail_silently=False,
-            )
-
-            return f"Notfied: {overdue_loans.count()} overdue loans"
-    except Loan.DoesNotExist:
-        pass
+    logger.info('check_overdue_loans notified %d member(s)', notified)
+    return f'Notified: {notified} overdue loans'
