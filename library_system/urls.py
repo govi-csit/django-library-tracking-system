@@ -11,5 +11,6 @@ router.register(r'loans', views.LoanViewSet)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/backlinks/', views.BacklinkGraphView.as_view(), name='backlink-graph'),
     path('api/', include(router.urls)),
 ]
