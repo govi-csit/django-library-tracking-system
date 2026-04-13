@@ -49,6 +49,8 @@ class Loan(models.Model):
         return f"{self.book.title} loaned to {self.member.user.username}"
 
     def save(self, *args, **kwargs):
-        self.due_date = self.loan_date + timedelta(days=14)
+        if self.due_date is None:
+            base_date = self.loan_date or timezone.now().date()
+            self.due_date = base_date + timedelta(days=14)
         super().save(*args, **kwargs)
 

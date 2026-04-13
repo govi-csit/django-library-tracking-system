@@ -1,6 +1,8 @@
 import json
 import os
 
+from datetime import timedelta
+
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -10,7 +12,7 @@ from rest_framework.decorators import action
 from django.utils import timezone
 from .tasks import send_loan_notification, build_backlink_graph, BACKLINK_GRAPH_PATH
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Count, Q
 
 
 class AuthorViewSet(viewsets.ModelViewSet):
@@ -66,9 +68,57 @@ class MemberViewSet(viewsets.ModelViewSet):
     queryset = Member.objects.all()
     serializer_class = MemberSerializer
 
+    @action(detail=False, methods=['get'], url_path='top-active')
+    def top_active(self, request):
+        top_members = (
+            Member.objects
+            .annotate(active_loans=Count('loans', filter=Q(loans__is_returned=False)))
+            .filter(active_loans__gt=0)
+            .select_related('user')
+            .order_by('-active_loans', 'id')[:5]
+        )
+        payload = [
+            {
+                'id': member.id,
+                'username': member.user.username,
+                'active_loans': member.active_loans,
+            }
+            for member in top_members
+        ]
+        return Response(payload)
+
+
 class LoanViewSet(viewsets.ModelViewSet):
     queryset = Loan.objects.all()
     serializer_class = LoanSerializer
+
+    @action(detail=True, methods=['post'], url_path='extend_due_date')
+    def extend_due_date(self, request, pk=None):
+        loan = self.get_object()
+
+        if loan.is_returned:
+            return Response(
+                {'error': 'Cannot extend a loan that has already been returned.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        today = timezone.now().date()
+        if loan.due_date and loan.due_date < today:
+            return Response(
+                {'error': 'Cannot extend an overdue loan.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        additional_days = request.data.get('additional_days')
+        if not isinstance(additional_days, int) or isinstance(additional_days, bool) or additional_days <= 0:
+            return Response(
+                {'error': 'additional_days must be a positive integer.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        loan.due_date = (loan.due_date or today) + timedelta(days=additional_days)
+        loan.save()
+        return Response(LoanSerializer(loan).data, status=status.HTTP_200_OK)
 
 
 class BacklinkGraphView(APIView):
