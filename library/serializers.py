@@ -20,7 +20,7 @@ class BookSerializer(serializers.ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'username', 'email']
+        fields = '__all__'
 
 class MemberSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
